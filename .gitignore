@@ -1,0 +1,7 @@
+proto
+!/src/pruntime/proto/*
+node_modules
+dist
+!dist/.gitignore
+edgeware.json
+.idea

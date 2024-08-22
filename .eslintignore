@@ -1,0 +1,5 @@
+proto/*
+**/*.d.ts
+dist
+esm
+protoWrapper.js
