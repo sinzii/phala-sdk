@@ -64,6 +64,7 @@
     "@polkadot/util-crypto": "^12.3.2",
     "browserify-cipher": "^1.0.1",
     "cross-fetch": "^4.0.0",
+    "dedot": "^0.5.0",
     "protobufjs": "^7.2.4",
     "randombytes": "^2.1.0",
     "rxjs": "^7.8.1",

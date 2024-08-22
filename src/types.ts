@@ -1,6 +1,8 @@
 import type { Abi } from '@polkadot/api-contract/Abi'
 import type { Result, Struct, Vec, u128, u32, u8 } from '@polkadot/types-codec'
 import type { IEnum, IMap } from '@polkadot/types-codec/types'
+import { DedotClient, LegacyClient } from 'dedot'
+import { PhalaApi } from './chaintypes/phala'
 
 export interface InkQueryOk extends IEnum {
   asInkMessageReturn: Vec<u8>
@@ -31,3 +33,5 @@ interface PalletBalancesAccountData extends Struct {
   readonly frozen: u128
   readonly flags: u128
 }
+
+export type PhalaClient = LegacyClient<PhalaApi>

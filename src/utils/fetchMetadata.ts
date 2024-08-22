@@ -21,7 +21,7 @@ export async function fetchMetadata(rpc: LiteralRpc) {
     requestRpc(http, '{"id":2,"jsonrpc":"2.0","method":"state_getRuntimeVersion","params":[]}'),
     requestRpc(http, '{"id":3,"jsonrpc":"2.0","method":"state_getMetadata","params":[]}'),
   ])
-  const id = `${blockHashResp.result}-${specResp.result.specVersion}`
+  const id = `RAW_META/${blockHashResp.result}/${specResp.result.specVersion}`
 
   return {
     [id]: metadataResp.result,

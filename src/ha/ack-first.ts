@@ -1,6 +1,7 @@
-import { type ApiPromise } from '@polkadot/api'
-import type { Enum, Option, Text, U8aFixed, Vec } from '@polkadot/types'
+import type { Enum, Text, Vec } from '@polkadot/types'
+import { HexString } from '@polkadot/util/types'
 import createPruntimeClient from '../pruntime/createPruntimeClient'
+import { PhalaClient } from '../types'
 
 export interface PhalaTypesVersionedWorkerEndpoints extends Enum {
   readonly isV1: boolean
@@ -27,17 +28,16 @@ async function ack(
  */
 export function ackFirst() {
   return async function ackFirst(
-    apiPromise: ApiPromise,
+    client: PhalaClient,
     clusterId: string
   ): Promise<Readonly<[string, string, ReturnType<typeof createPruntimeClient>]>> {
-    const workersQuery = await apiPromise.query.phalaPhatContracts.clusterWorkers<Vec<U8aFixed>>(clusterId)
-    const workerIds = workersQuery.map((i) => i.toHex())
-    const endpointsQuery =
-      await apiPromise.query.phalaRegistry.endpoints.multi<Option<PhalaTypesVersionedWorkerEndpoints>>(workerIds)
+    const workerIds = await client.query.phalaPhatContracts.clusterWorkers(clusterId as HexString)
+    const endpointsQuery = await client.query.phalaRegistry.endpoints.multi(workerIds)
+
     const pairs = endpointsQuery
       .map((i, idx) => [workerIds[idx], i] as const)
-      .filter(([_, maybeEndpoint]) => maybeEndpoint.isSome)
-      .map(([workerId, maybeEndpoint]) => [workerId, maybeEndpoint.unwrap().asV1[0].toString()])
+      .filter(([_, maybeEndpoint]) => !!maybeEndpoint)
+      .map(([workerId, maybeEndpoint]) => [workerId, maybeEndpoint!.value[0]])
     try {
       return await Promise.any(pairs.map(([workerId, endpoint]) => ack(workerId, endpoint)))
     } catch (_err) {

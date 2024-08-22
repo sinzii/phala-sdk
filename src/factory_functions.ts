@@ -1,11 +1,12 @@
-import { ApiPromise, Keyring, WsProvider } from '@polkadot/api'
+import { Keyring } from '@polkadot/api'
 import type { AccountId } from '@polkadot/types/interfaces'
 import type { HexString } from '@polkadot/util/types'
 import { cryptoWaitReady } from '@polkadot/util-crypto'
+import { LegacyClient, WsProvider } from 'dedot'
+import { PhalaApi } from './chaintypes/phala'
 import { PinkContractPromise } from './contracts/PinkContract'
 import { PinkLoggerContractPromise } from './contracts/PinkLoggerContract'
 import { type CreateOptions, OnChainRegistry } from './OnChainRegistry'
-import { options } from './options'
 import createPruntimeClient from './pruntime/createPruntimeClient'
 import type { AbiLike } from './types'
 import { type LiteralRpc, fetchMetadata } from './utils/fetchMetadata'
@@ -28,7 +29,10 @@ export async function getClient(opts: GetClientOptions): Promise<OnChainRegistry
   if (typeof transport === 'string' && !metadata && transport.indexOf('phala.network/') !== -1 && !noPreloadMetadata) {
     metadata = await fetchMetadata(transport)
   }
-  const api = await ApiPromise.create(options({ provider, noInitWarn: true, metadata }))
+  const api = await LegacyClient.create<PhalaApi>({
+    provider,
+    metadata,
+  })
   return await OnChainRegistry.create(api, rest)
 }
 

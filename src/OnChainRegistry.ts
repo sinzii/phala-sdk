@@ -1,40 +1,21 @@
 import { type ApiPromise, Keyring } from '@polkadot/api'
 import { type KeyringPair } from '@polkadot/keyring/types'
 import type { Result, U64 } from '@polkadot/types'
-import { Enum, Map, Option, Text, U8aFixed, Vec } from '@polkadot/types'
 import { AccountId } from '@polkadot/types/interfaces'
-import { BN } from '@polkadot/util'
+import { HexString } from '@polkadot/util/types'
 import { cryptoWaitReady } from '@polkadot/util-crypto'
+import { AccountId32, AccountId32Like } from 'dedot/codecs'
 import systemAbi from './abis/system.json'
+import { PhalaTypesContractClusterInfo } from './chaintypes/phala'
 import { PinkContractPromise } from './contracts/PinkContract'
 import { PinkLoggerContractPromise } from './contracts/PinkLoggerContract'
-import { type PhalaTypesVersionedWorkerEndpoints, ackFirst } from './ha/ack-first'
+import { ackFirst } from './ha/ack-first'
 import { type CertificateData, signCertificate } from './pruntime/certificate'
 import createPruntimeClient from './pruntime/createPruntimeClient'
 import { pruntime_rpc } from './pruntime/proto'
-
-export class UnexpectedEndpointError extends Error {}
+import { PhalaClient } from './types'
 
 // @FIXME: We not yet cover `as` and the `OnlyOwner` scenario.
-interface ClusterPermission extends Enum {
-  readonly isPublic: boolean
-}
-
-interface ClusterInfo extends Map {
-  owner: AccountId
-  permission: ClusterPermission
-  workers: Vec<U8aFixed>
-  systemContract?: AccountId
-  gasPrice?: BN
-  depositPerItem?: BN
-  depositPerByte?: BN
-}
-
-interface VersionedEndpoints extends Enum {
-  readonly isV1: boolean
-  readonly asV1: Vec<Text>
-}
-
 export interface CreateOptions {
   autoConnect?: boolean
   clusterId?: string
@@ -45,7 +26,7 @@ export interface CreateOptions {
   strategy?:
     | 'ack-first'
     | ((
-        api: ApiPromise,
+        api: PhalaClient,
         clusterId: string
       ) => Promise<Readonly<[string, string, ReturnType<typeof createPruntimeClient>]>>)
 }
@@ -72,10 +53,10 @@ export interface StrategicWorkerInfo {
 }
 
 export class OnChainRegistry {
-  public api: ApiPromise
+  public api: PhalaClient
 
   public clusterId: string | undefined
-  public clusterInfo: ClusterInfo | undefined
+  public clusterInfo: PhalaTypesContractClusterInfo | undefined
 
   public workerInfo: WorkerInfo | undefined
 
@@ -88,12 +69,13 @@ export class OnChainRegistry {
   #systemContract: PinkContractPromise | undefined
   #loggerContract: PinkLoggerContractPromise | undefined
 
-  constructor(api: ApiPromise) {
+  constructor(api: PhalaClient) {
     this.api = api
   }
 
-  public async getContractKey(contractId: AccountId | string) {
-    const contractKey = await this.api.query.phalaRegistry.contractKeys(contractId)
+  public async getContractKey(contractId: AccountId32Like) {
+    const contractAccountId = new AccountId32(contractId)
+    const contractKey = await this.api.query.phalaRegistry.contractKeys(contractAccountId.raw)
     if (!contractKey) {
       return undefined
     }
@@ -129,11 +111,11 @@ export class OnChainRegistry {
   /**
    * Static factory method returns a ready to use PhatRegistry object.
    */
-  static async create(api: ApiPromise, options?: CreateOptions) {
+  static async create(api: PhalaClient, options?: CreateOptions) {
     options = { autoConnect: true, ...(options || {}) }
     const instance = new OnChainRegistry(api)
     // We should ensure the wasm & api has been initialized here.
-    await Promise.all([cryptoWaitReady(), api.isReady])
+    await Promise.all([cryptoWaitReady(), api.connect()])
     if (options.autoConnect) {
       if (!options.clusterId && !options.workerId && !options.pruntimeURL) {
         await instance.connect()
@@ -172,46 +154,27 @@ export class OnChainRegistry {
   }
 
   public async getAllClusters() {
-    const result = await this.api.query.phalaPhatContracts.clusters.entries()
-    return result.map(([storageKey, value]) => {
-      const clusterId = storageKey.args.map((i) => i.toPrimitive())[0] as string
-      const clusterInfo = (value as Option<ClusterInfo>).unwrap()
-      return [clusterId, clusterInfo] as const
-    })
+    return await this.api.query.phalaPhatContracts.clusters.pagedEntries()
   }
 
-  public async getClusterInfoById(clusterId: string) {
-    const result = (await this.api.query.phalaPhatContracts.clusters(clusterId)) as Option<ClusterInfo>
-    if (result.isNone) {
-      return null
-    }
-    return result.unwrap()
+  public async getClusterInfoById(clusterId: HexString | string) {
+    return await this.api.query.phalaPhatContracts.clusters(clusterId as HexString)
   }
 
-  public async getClusters(clusterId?: string) {
+  public async getClusters(clusterId?: HexString | string) {
     if (clusterId) {
-      const result = (await this.api.query.phalaPhatContracts.clusters(clusterId)) as Option<ClusterInfo>
-      if (result.isNone) {
-        return null
-      }
-      return result.unwrap()
+      return await this.api.query.phalaPhatContracts.clusters(clusterId as HexString)
     } else {
       return await this.getAllClusters()
     }
   }
 
-  public async getEndpoints(workerId?: U8aFixed | string) {
+  public async getEndpoints(workerId?: HexString) {
     if (workerId) {
-      if (typeof workerId !== 'string') {
-        workerId = workerId.toHex()
-      }
-      return await this.api.query.phalaRegistry.endpoints<Option<VersionedEndpoints>>(workerId)
+      return await this.api.query.phalaRegistry.endpoints(workerId)
     }
-    const result = await this.api.query.phalaRegistry.endpoints.entries()
-    return result.map(([storageKey, value]) => {
-      const workerId = storageKey.args.map((i) => i.toPrimitive())[0] as string
-      return [workerId, value as Option<VersionedEndpoints>]
-    })
+
+    return await this.api.query.phalaRegistry.endpoints.pagedEntries()
   }
 
   public async getClusterWorkers(clusterId?: string): Promise<WorkerInfo[]> {
@@ -223,22 +186,20 @@ export class OnChainRegistry {
       }
       _clusterId = clusters[0][0] as string
     }
-    const result = await this.api.query.phalaPhatContracts.clusterWorkers(_clusterId)
-    const workerIds = result.toJSON() as string[]
-    const infos =
-      await this.api.query.phalaRegistry.endpoints.multi<Option<PhalaTypesVersionedWorkerEndpoints>>(workerIds)
+    const workerIds = await this.api.query.phalaPhatContracts.clusterWorkers(_clusterId as HexString)
+    const infos = await this.api.query.phalaRegistry.endpoints.multi(workerIds)
 
     return infos
-      .map((i, idx) => [workerIds[idx], i] as const)
-      .filter(([_, maybeEndpoint]) => maybeEndpoint.isSome)
+      .map((info, idx) => [workerIds[idx], info] as const)
+      .filter(([_, maybeEndpoint]) => !!maybeEndpoint)
       .map(
         ([workerId, maybeEndpoint]) =>
           ({
             pubkey: workerId,
             clusterId: _clusterId!,
             endpoints: {
-              default: maybeEndpoint.unwrap().asV1[0].toString(),
-              v1: maybeEndpoint.unwrap().asV1.map((i) => i.toString()),
+              default: maybeEndpoint!.value[0],
+              v1: maybeEndpoint!.value,
             },
           }) as WorkerInfo
       )
@@ -259,7 +220,7 @@ export class OnChainRegistry {
     }
   }
 
-  async prepareSystemOrThrows(clusterInfo: ClusterInfo) {
+  async prepareSystemOrThrows(clusterInfo: PhalaTypesContractClusterInfo) {
     const systemContractId = clusterInfo.systemContract
     if (systemContractId) {
       const systemContractKey = await this.getContractKey(systemContractId)
@@ -388,7 +349,7 @@ export class OnChainRegistry {
               throw new Error(`getClusterInfo is unavailable, please ensure ${pruntimeURL} is valid PRuntime endpoint.`)
             }
           }
-          const clusterInfo = await this.getClusterInfoById(clusterId)
+          const clusterInfo = await this.getClusterInfoById(clusterId as HexString)
           if (!clusterInfo) {
             throw new Error(`Cluster not found: ${partialInfo.clusterId}`)
           }
@@ -434,10 +395,10 @@ export class OnChainRegistry {
     let systemContractId = args[3] as string | AccountId | undefined
     const skipCheck = args[4] as boolean | undefined
 
-    let clusterInfo
+    let clusterInfo: PhalaTypesContractClusterInfo
 
     if (clusterId) {
-      clusterInfo = await this.getClusters(clusterId)
+      clusterInfo = (await this.getClusters(clusterId)) as PhalaTypesContractClusterInfo
       if (!clusterInfo) {
         throw new Error(`Cluster not found: ${clusterId}`)
       }
@@ -450,7 +411,7 @@ export class OnChainRegistry {
         throw new Error('No cluster found.')
       }
       clusterId = clusters[0][0] as string
-      clusterInfo = clusters[0][1] as ClusterInfo
+      clusterInfo = clusters[0][1] as PhalaTypesContractClusterInfo
     }
 
     if (!skipCheck) {
@@ -460,10 +421,10 @@ export class OnChainRegistry {
       }
       if (!workerId && !pruntimeURL) {
         workerId = endpoints[0][0] as string
-        pruntimeURL = (endpoints[0][1] as Option<VersionedEndpoints>).unwrap().asV1[0].toPrimitive() as string
+        pruntimeURL = endpoints[0][1].value[0]
       } else if (pruntimeURL) {
         const endpoint = endpoints.find(([_, v]) => {
-          const url = (v as Option<VersionedEndpoints>).unwrap().asV1[0].toPrimitive() as string
+          const url = v.value[0]
           return url === pruntimeURL
         })
         if (endpoint) {
@@ -474,7 +435,8 @@ export class OnChainRegistry {
         if (!endpoint) {
           throw new Error(`Worker not found: ${workerId}`)
         }
-        pruntimeURL = (endpoint[1] as Option<VersionedEndpoints>).unwrap().asV1[0].toPrimitive() as string
+
+        pruntimeURL = endpoint[1].value[0]
       }
     }
 
@@ -499,7 +461,7 @@ export class OnChainRegistry {
         v1: [pruntimeURL!],
       },
     }
-    this.clusterInfo = clusterInfo as ClusterInfo
+    this.clusterInfo = clusterInfo
 
     this.#ready = true
 
@@ -561,8 +523,8 @@ export class OnChainRegistry {
     }
   }
 
-  transferToCluster(address: string | AccountId, amount: number | string | BN) {
-    return this.api.tx.phalaPhatContracts.transferToCluster(amount, this.clusterId, address)
+  transferToCluster(address: AccountId32Like, amount: bigint) {
+    return this.api.tx.phalaPhatContracts.transferToCluster(amount, this.clusterId as HexString, address)
   }
 
   get loggerContract() {
